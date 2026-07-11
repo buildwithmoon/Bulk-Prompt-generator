@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk Manhwa/Anime Recap Prompt Generator | buildwithmoon</title>
+  <!-- Google Fonts for premium typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="glow-bg"></div>
+  
+  <!-- Header Branding -->
+  <header>
+    <div class="container header-container">
+      <div class="logo-container">
+        <span class="logo-badge">PRO</span>
+        <h1 class="logo-text">buildwith<span>moon</span></h1>
+        <span class="logo-divider">|</span>
+        <span class="logo-subtext">Anime/Manhwa Recap Prompt Generator</span>
+      </div>
+      <div class="header-actions">
+        <button id="btn-toggle-settings" class="btn btn-secondary flex-center" title="Manage Gemini API Keys & Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          API Settings
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- API Settings Drawer / Overlay -->
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-content glass-card">
+        <div class="settings-header">
+          <h2>API & Generation Settings</h2>
+          <button id="btn-close-settings" class="btn-close">&times;</button>
+        </div>
+        <div class="settings-body">
+          <!-- API Keys Section -->
+          <div class="settings-section">
+            <h3>Gemini API Keys</h3>
+            <p class="section-desc">Add multiple API keys to enable parallel chunk processing. Requests will rotate automatically to bypass rate limits.</p>
+            
+            <div class="api-key-input-group">
+              <input type="password" id="input-api-key" placeholder="Enter Gemini API Key (AIzaSy...)" class="form-input">
+              <button id="btn-add-key" class="btn btn-primary">Add Key</button>
+            </div>
+            
+            <div id="keys-container" class="keys-container">
+              <!-- Keys will be injected here by JS -->
+              <div class="no-keys-alert">No API keys added yet. Add at least one key to start generating.</div>
+            </div>
+          </div>
+
+          <!-- Configuration parameters -->
+          <div class="settings-section">
+            <h3>Execution Parameters</h3>
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="select-model">Gemini Model</label>
+                <select id="select-model" class="form-input">
+                  <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (Recommended)</option>
+                  <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                  <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="input-chunk-size">Lines Per Chunk (1-20)</label>
+                <input type="number" id="input-chunk-size" class="form-input" min="1" max="20" value="5">
+              </div>
+
+              <div class="form-group">
+                <label for="input-concurrency">Max Concurrent Requests (1-10)</label>
+                <input type="number" id="input-concurrency" class="form-input" min="1" max="10" value="3">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Workspace Grid -->
+    <div class="workspace-grid">
+      
+      <!-- Left Panel: Context & Settings -->
+      <section class="workspace-left">
+        <div class="glass-card panel-card">
+          <div class="card-header">
+            <h2>Story Context & Settings</h2>
+            <p class="card-subtitle">Define characters, power systems, and world building elements to feed consistent parameters to the AI prompt generator.</p>
+          </div>
+          
+          <div class="card-body">
+            <!-- Tone -->
+            <div class="form-group">
+              <div class="flex-between">
+                <label for="input-tone">Overall Tone / Vibe</label>
+                <label class="toggle-not-required">
+                  <input type="checkbox" id="toggle-tone-not-required">
+                  <span>Not Required</span>
+                </label>
+              </div>
+              <input type="text" id="input-tone" class="form-input" placeholder="e.g. dark, epic, gritty, bittersweet, comedic action" value="Dark fantasy, intense, high-stakes, epic action">
+            </div>
+
+            <!-- World / Setting -->
+            <div class="form-group">
+              <div class="flex-between">
+                <label for="input-world">World / Setting Settings</label>
+                <label class="toggle-not-required">
+                  <input type="checkbox" id="toggle-world-not-required">
+                  <span>Not Required</span>
+                </label>
+              </div>
+              <textarea id="input-world" class="form-input textarea-small" placeholder="Describe the world rules, environment design, coloring styles, e.g. dark dungeons filled with neon-blue portal gates, decayed stone walls, ancient ruins..."></textarea>
+            </div>
+
+            <!-- Power System -->
+            <div class="form-group">
+              <div class="flex-between">
+                <label for="input-power">Power / Magic System Details</label>
+                <label class="toggle-not-required">
+                  <input type="checkbox" id="toggle-power-not-required">
+                  <span>Not Required</span>
+                </label>
+              </div>
+              <textarea id="input-power" class="form-input textarea-small" placeholder="Describe glowing magic visual indicators, energy flow colors, weapon glows, aura styles, e.g. magical hunter ranks, blue mana aura, dark smoke rising from resurrected shadows..."></textarea>
+            </div>
+
+            <!-- Character Blocks -->
+            <div class="form-group">
+              <div class="flex-between">
+                <label>Character Descriptions</label>
+                <div class="flex-center gap-10">
+                  <label class="toggle-not-required">
+                    <input type="checkbox" id="toggle-chars-not-required">
+                    <span>Not Required</span>
+                  </label>
+                  <button type="button" id="btn-add-character" class="btn-text-action flex-center">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    Add Character
+                  </button>
+                </div>
+              </div>
+              <div id="character-blocks-container" class="character-blocks-container">
+                <!-- Character blocks will be dynamically generated here -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel: Script Upload & Generation -->
+      <section class="workspace-right">
+        <div class="glass-card panel-card">
+          <div class="card-header">
+            <h2>Script & Prompt Configuration</h2>
+            <p class="card-subtitle">Paste your recap video script or upload an SRT subtitle file to generate prompts.</p>
+          </div>
+          
+          <div class="card-body">
+            <!-- Script Inputs -->
+            <div class="form-group">
+              <div class="flex-between">
+                <label for="input-script">Script or SRT Contents</label>
+                <span class="file-upload-badge flex-center">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                  Upload SRT / TXT
+                  <input type="file" id="file-upload" accept=".srt,.txt">
+                </span>
+              </div>
+              <textarea id="input-script" class="form-input textarea-large" placeholder="Paste your script text line-by-line, or upload an SRT subtitle file..."></textarea>
+            </div>
+
+            <!-- Base Prompt Instructions Accordion/Box -->
+            <div class="form-group">
+              <div class="flex-between">
+                <label for="input-base-prompt">Base Prompt & System Instructions</label>
+                <button type="button" id="btn-reset-prompt" class="btn-text-action">Reset to Default</button>
+              </div>
+              <textarea id="input-base-prompt" class="form-input textarea-medium code-font" placeholder="Loading system prompt instructions..."></textarea>
+            </div>
+
+            <!-- Generate CTA -->
+            <div class="generation-cta-container">
+              <button id="btn-generate" class="btn btn-primary btn-large btn-glowing flex-center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Generate Bulk Prompts
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Progress Dashboard Component (Hidden initially) -->
+    <section id="dashboard-section" class="dashboard-section glass-card hidden">
+      <div class="dashboard-header flex-between">
+        <div>
+          <h2>Prompt Generation Progress</h2>
+          <p id="dashboard-status-text">Processing chunks in parallel across active API keys...</p>
+        </div>
+        <div class="flex-center gap-10">
+          <button id="btn-cancel-generation" class="btn btn-danger flex-center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            Cancel Run
+          </button>
+        </div>
+      </div>
+      
+      <div class="progress-container">
+        <div class="progress-bar-track">
+          <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+        <div class="progress-numbers flex-between">
+          <span id="progress-text-fraction">0 / 0 Lines Generated</span>
+          <span id="progress-text-percent">0%</span>
+        </div>
+      </div>
+
+      <div class="dashboard-stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">Total Lines</span>
+          <span id="stat-total-lines" class="stat-val">0</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">Total Chunks</span>
+          <span id="stat-total-chunks" class="stat-val">0</span>
+        </div>
+        <div class="stat-card completed">
+          <span class="stat-label">Completed</span>
+          <span id="stat-completed" class="stat-val">0</span>
+        </div>
+        <div class="stat-card retried">
+          <span class="stat-label">Retries</span>
+          <span id="stat-retries" class="stat-val">0</span>
+        </div>
+        <div class="stat-card failed">
+          <span class="stat-label">Failures</span>
+          <span id="stat-failures" class="stat-val">0</span>
+        </div>
+      </div>
+
+      <!-- Active Key Load Balancing Status -->
+      <div class="key-status-dashboard">
+        <h4>Key Rotation Dashboard</h4>
+        <div id="key-activity-grid" class="key-activity-grid">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- Results Section (Hidden initially) -->
+    <section id="results-section" class="results-section glass-card hidden">
+      <div class="results-header flex-between">
+        <div>
+          <h2>Generated Prompts</h2>
+          <p id="results-meta-text">Reassembled and order-locked sequentially from API workers.</p>
+        </div>
+        
+        <div class="results-actions flex-center">
+          <button id="btn-copy-all" class="btn btn-secondary flex-center">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            Copy All Prompts
+          </button>
+          <button id="btn-download-txt" class="btn btn-secondary flex-center">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export TXT
+          </button>
+          <button id="btn-download-csv" class="btn btn-secondary flex-center">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export CSV
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter/Search prompts -->
+      <div class="filter-bar">
+        <input type="text" id="input-search-prompts" class="form-input" placeholder="Search prompts or script lines...">
+      </div>
+
+      <div class="table-container">
+        <table class="results-table">
+          <thead>
+            <tr>
+              <th width="80">Index</th>
+              <th width="300">Script Source / Timing</th>
+              <th width="150">Shot Type</th>
+              <th>Midjourney Prompts</th>
+              <th width="80" class="text-center">Action</th>
+            </tr>
+          </thead>
+          <tbody id="results-table-body">
+            <!-- Prompts will be dynamically generated here -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Post-Gen Automation Hooks -->
+      <div class="post-generation-hooks">
+        <h3>YouTube Production Flow Automation</h3>
+        <p class="hooks-subtitle">Main generation complete! Choose a follow-up action to complete your video asset pipeline:</p>
+        
+        <div class="hooks-grid">
+          <!-- Hook Card 1: Thumbnail Prompts -->
+          <div class="hook-card glass-card clickable" id="btn-hook-thumbnail">
+            <div class="hook-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffeb3b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+            </div>
+            <div class="hook-details">
+              <h4>Generate Thumbnail Prompts</h4>
+              <p>Creates 3 custom YouTube thumbnail prompts using our split-focus design, arrows, and high-saturation manhwa rules.</p>
+            </div>
+            <div class="hook-action">
+              <span class="badge badge-accent">Create</span>
+            </div>
+          </div>
+
+          <!-- Hook Card 2: YouTube SEO -->
+          <div class="hook-card glass-card clickable" id="btn-hook-seo">
+            <div class="hook-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00ffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46a2.78 2.78 0 0 0-1.95 1.96A29 29 0 0 0 1 12a29 29 0 0 0 .46 5.58 2.78 2.78 0 0 0 1.95 1.96C5.12 20 12 20 12 20s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.95-1.96A29 29 0 0 0 23 12a29 29 0 0 0-.46-5.58z"></path><polygon points="9.75 15.02 15.5 12 9.75 8.98 9.75 15.02"></polygon></svg>
+            </div>
+            <div class="hook-details">
+              <h4>YouTube SEO Metadata</h4>
+              <p>Generates high-CTR video titles, structured descriptions with timestamps placeholders, and search-optimized tags.</p>
+            </div>
+            <div class="hook-action">
+              <span class="badge badge-cyan">Generate</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modal for Post-Gen Display -->
+    <div id="hook-modal" class="modal hidden">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h2 id="modal-title">Automation Action</h2>
+          <button id="btn-close-modal" class="btn-close">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body-content">
+          <!-- JS will inject content here -->
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="footer">
+    <div class="container text-center">
+      <p>buildwithmoon &copy; 2026. Premium Manhwa Recap Production Suite.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
