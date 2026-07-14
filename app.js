@@ -57,7 +57,6 @@ Every prompt must end with this exact parameter block:
 // ==========================================
 let state = {
   apiKeys: [], // { key: string, label: string, status: 'idle'|'active'|'rate-limited'|'failed', cooldownUntil: number }
-  characters: [], // { id: string, name: string, description: string }
   parsedLines: [], // { index: number, timestamp: string|null, text: string }
   generationQueue: [], // chunks to process
   runningWorkers: 0,
@@ -91,12 +90,11 @@ const elements = {
   inputTone: document.getElementById('input-tone'),
   inputWorld: document.getElementById('input-world'),
   inputPower: document.getElementById('input-power'),
-  btnAddCharacter: document.getElementById('btn-add-character'),
-  characterBlocksContainer: document.getElementById('character-blocks-container'),
+  inputCharacter: document.getElementById('input-character'),
   toggleToneNotRequired: document.getElementById('toggle-tone-not-required'),
   toggleWorldNotRequired: document.getElementById('toggle-world-not-required'),
   togglePowerNotRequired: document.getElementById('toggle-power-not-required'),
-  toggleCharsNotRequired: document.getElementById('toggle-chars-not-required'),
+  toggleCharacterNotRequired: document.getElementById('toggle-character-not-required'),
   
   fileUpload: document.getElementById('file-upload'),
   inputScript: document.getElementById('input-script'),
@@ -160,15 +158,8 @@ document.addEventListener('DOMContentLoaded', () => {
     })
     .catch(err => console.log('Notice: using embedded fallback system instructions.', err));
 
-  // Add initial character block if none exist
-  if (state.characters.length === 0) {
-    addCharacterBlock();
-  } else {
-    renderCharacterBlocks();
-  }
-  
-  // Re-apply character toggle state on load to ensure block forms are greyed out if loaded as Not Required
-  applyToggleState('chars', elements.toggleCharsNotRequired.checked);
+  // Re-apply character toggle state on load
+  applyToggleState('character', elements.toggleCharacterNotRequired.checked);
 });
 
 // ==========================================
@@ -178,16 +169,7 @@ function saveToLocalStorage() {
   localStorage.setItem('gemini_api_keys', JSON.stringify(state.apiKeys));
   localStorage.setItem('base_system_prompt', elements.inputBasePrompt.value);
   
-  // Collect characters
-  const charBlocks = document.querySelectorAll('.character-block');
-  const chars = Array.from(charBlocks).map(block => {
-    return {
-      id: block.dataset.id,
-      name: block.querySelector('.char-name').value,
-      description: block.querySelector('.char-desc').value
-    };
-  });
-  localStorage.setItem('story_characters', JSON.stringify(chars));
+  localStorage.setItem('story_character_descriptions', elements.inputCharacter.value);
   localStorage.setItem('story_tone', elements.inputTone.value);
   localStorage.setItem('story_world', elements.inputWorld.value);
   localStorage.setItem('story_power', elements.inputPower.value);
@@ -199,7 +181,7 @@ function saveToLocalStorage() {
   localStorage.setItem('toggle_tone_not_required', elements.toggleToneNotRequired.checked);
   localStorage.setItem('toggle_world_not_required', elements.toggleWorldNotRequired.checked);
   localStorage.setItem('toggle_power_not_required', elements.togglePowerNotRequired.checked);
-  localStorage.setItem('toggle_chars_not_required', elements.toggleCharsNotRequired.checked);
+  localStorage.setItem('toggle_character_not_required', elements.toggleCharacterNotRequired.checked);
 }
 
 function loadFromLocalStorage() {
@@ -219,11 +201,7 @@ function loadFromLocalStorage() {
       elements.inputBasePrompt.value = prompt;
     }
     
-    const chars = localStorage.getItem('story_characters');
-    if (chars) {
-      state.characters = JSON.parse(chars);
-    }
-    
+    elements.inputCharacter.value = localStorage.getItem('story_character_descriptions') || "";
     elements.inputTone.value = localStorage.getItem('story_tone') || "Dark fantasy, intense, high-stakes, epic action";
     elements.inputWorld.value = localStorage.getItem('story_world') || "";
     elements.inputPower.value = localStorage.getItem('story_power') || "";
@@ -236,13 +214,13 @@ function loadFromLocalStorage() {
     elements.toggleToneNotRequired.checked = localStorage.getItem('toggle_tone_not_required') === 'true';
     elements.toggleWorldNotRequired.checked = localStorage.getItem('toggle_world_not_required') === 'true';
     elements.togglePowerNotRequired.checked = localStorage.getItem('toggle_power_not_required') === 'true';
-    elements.toggleCharsNotRequired.checked = localStorage.getItem('toggle_chars_not_required') === 'true';
+    elements.toggleCharacterNotRequired.checked = localStorage.getItem('toggle_character_not_required') === 'true';
     
     // Apply visual disabled states
     applyToggleState('tone', elements.toggleToneNotRequired.checked);
     applyToggleState('world', elements.toggleWorldNotRequired.checked);
     applyToggleState('power', elements.togglePowerNotRequired.checked);
-    applyToggleState('chars', elements.toggleCharsNotRequired.checked);
+    applyToggleState('character', elements.toggleCharacterNotRequired.checked);
   } catch (e) {
     console.error("Failed to load local storage configurations", e);
   }
@@ -266,23 +244,9 @@ function setupEventListeners() {
     if (e.key === 'Enter') addApiKey();
   });
   
-  // Character Blocks Management
-  elements.btnAddCharacter.addEventListener('click', () => addCharacterBlock());
-  
-  // Reset Prompt Template
-  elements.btnResetPrompt.addEventListener('click', () => {
-    if (confirm("Are you sure you want to reset the base system instructions? Any modifications will be lost.")) {
-      elements.inputBasePrompt.value = DEFAULT_SYSTEM_PROMPT;
-      saveToLocalStorage();
-    }
-  });
-  
-  // SRT/TXT File Upload
-  elements.fileUpload.addEventListener('change', handleFileUpload);
-  
   // Save settings on input blur
   const autoSaveSelectors = [
-    elements.inputTone, elements.inputWorld, elements.inputPower,
+    elements.inputTone, elements.inputWorld, elements.inputPower, elements.inputCharacter,
     elements.inputBasePrompt, elements.selectModel, elements.inputChunkSize, elements.inputConcurrency
   ];
   autoSaveSelectors.forEach(el => {
@@ -311,7 +275,7 @@ function setupEventListeners() {
   elements.btnHookSeo.addEventListener('click', generateYoutubeSEO);
   
   // Toggles event listeners
-  ['tone', 'world', 'power', 'chars'].forEach(type => {
+  ['tone', 'world', 'power', 'character'].forEach(type => {
     const capitalized = type.charAt(0).toUpperCase() + type.slice(1);
     const toggleEl = elements[`toggle${capitalized}NotRequired`];
     if (toggleEl) {
@@ -331,17 +295,8 @@ function applyToggleState(type, isNotRequired) {
     elements.inputWorld.disabled = isNotRequired;
   } else if (type === 'power') {
     elements.inputPower.disabled = isNotRequired;
-  } else if (type === 'chars') {
-    elements.btnAddCharacter.disabled = isNotRequired;
-    if (isNotRequired) {
-      elements.characterBlocksContainer.classList.add('disabled');
-    } else {
-      elements.characterBlocksContainer.classList.remove('disabled');
-    }
-    const inputs = elements.characterBlocksContainer.querySelectorAll('input, textarea, button');
-    inputs.forEach(input => {
-      input.disabled = isNotRequired;
-    });
+  } else if (type === 'character') {
+    elements.inputCharacter.disabled = isNotRequired;
   }
 }
 
@@ -411,67 +366,8 @@ window.removeKeyIndex = removeApiKey;
 window.toggleKeyActiveStatus = toggleKeyStatus;
 
 // ==========================================
-// CHARACTER EDITOR DYNAMICS
+// CHARACTER EDITOR DYNAMICS (REPLACED BY SIMPLE TEXTAREA)
 // ==========================================
-function addCharacterBlock(name = "", desc = "") {
-  const id = 'char_' + Date.now() + Math.random().toString(36).substr(2, 5);
-  state.characters.push({ id, name, description: desc });
-  
-  const blockHtml = document.createElement('div');
-  blockHtml.className = 'character-block';
-  blockHtml.dataset.id = id;
-  blockHtml.innerHTML = `
-    <div class="character-block-header">
-      <input type="text" class="form-input char-name" placeholder="Character Name / ID (e.g. Sung Jin-Woo)" value="${name}">
-      <button class="btn-remove-character" title="Delete block">&times;</button>
-    </div>
-    <textarea class="form-input char-desc textarea-small" placeholder="Describe outfit, hair, age, appearance verbatim...">${desc}</textarea>
-  `;
-  
-  // Set up listeners for the input and textarea
-  const nameInput = blockHtml.querySelector('.char-name');
-  const descInput = blockHtml.querySelector('.char-desc');
-  const deleteBtn = blockHtml.querySelector('.btn-remove-character');
-  
-  // Respect the "Not Required" toggle state on character addition
-  if (elements.toggleCharsNotRequired && elements.toggleCharsNotRequired.checked) {
-    nameInput.disabled = true;
-    descInput.disabled = true;
-    deleteBtn.disabled = true;
-  }
-  
-  const saveAction = () => {
-    const chars = state.characters.find(c => c.id === id);
-    if (chars) {
-      chars.name = nameInput.value;
-      chars.description = descInput.value;
-    }
-    saveToLocalStorage();
-  };
-  
-  nameInput.addEventListener('blur', saveAction);
-  descInput.addEventListener('blur', saveAction);
-  
-  deleteBtn.addEventListener('click', () => {
-    blockHtml.remove();
-    state.characters = state.characters.filter(c => c.id !== id);
-    saveToLocalStorage();
-    
-    // Always keep at least one block
-    if (state.characterBlocksContainer.children.length === 0) {
-      addCharacterBlock();
-    }
-  });
-  
-  state.characterBlocksContainer.appendChild(blockHtml);
-}
-
-function renderCharacterBlocks() {
-  elements.characterBlocksContainer.innerHTML = '';
-  state.characters.forEach(char => {
-    addCharacterBlock(char.name, char.description);
-  });
-}
 
 // ==========================================
 // SRT & TXT SUBTITLE PARSING
@@ -761,30 +657,19 @@ async function callGeminiAPI(chunk, apiKey) {
   const tone = elements.inputTone.value;
   const world = elements.inputWorld.value;
   const power = elements.inputPower.value;
+  const character = elements.inputCharacter.value;
   
   const toneNotRequired = elements.toggleToneNotRequired.checked;
   const worldNotRequired = elements.toggleWorldNotRequired.checked;
   const powerNotRequired = elements.togglePowerNotRequired.checked;
-  const charsNotRequired = elements.toggleCharsNotRequired.checked;
+  const characterNotRequired = elements.toggleCharacterNotRequired.checked;
   
   // Dynamic system prompt cleaning: strip instructions matching disabled modules
-  if (charsNotRequired) {
+  if (characterNotRequired) {
     // Drop Character Consistency section (Section 2)
     systemPrompt = systemPrompt.replace(/## 2\.\s+Character Consistency Rule[\s\S]*?(?=(## 3\.)|#|$)/i, "");
     // Remove characters from prompt structure definition in Section 4
     systemPrompt = systemPrompt.replace(/\[Verbatim Character Descriptions[^\]]*\]\s*/gi, "");
-  }
-  
-  // Accumulate active character definitions
-  let activeChars = '';
-  if (!charsNotRequired) {
-    const charBlocks = document.querySelectorAll('.character-block');
-    activeChars = Array.from(charBlocks).map(block => {
-      const name = block.querySelector('.char-name').value.trim();
-      const desc = block.querySelector('.char-desc').value.trim();
-      if (name) return `- **${name}**: ${desc}`;
-      return null;
-    }).filter(c => c !== null).join('\n');
   }
   
   // Map lines list to prompt request block
@@ -800,16 +685,15 @@ async function callGeminiAPI(chunk, apiKey) {
   if (!powerNotRequired) {
     promptBody += `- Power System Visuals: ${power}\n`;
   }
-  
-  if (!charsNotRequired) {
-    promptBody += `\nACTIVE CHARACTER SPECIFIC DESCRIPTIONS:\n${activeChars || 'No specific character descriptions defined.'}\n`;
+  if (!characterNotRequired) {
+    promptBody += `- Character Descriptions: ${character}\n`;
   }
   
   promptBody += `\nGENERATE DETAILED MIDJOURNEY PROMPTS FOR THESE SCRIPT LINES:\n${linesPayload}\n\n`;
   promptBody += `Generate exactly ${chunk.lines.length} prompts matching the order of the lines above.\n`;
   promptBody += `Ensure every prompt starts with the exact style prefix: "Modern manhwa illustration style, dynamic anime digital art, ".\n`;
   
-  if (!charsNotRequired) {
+  if (!characterNotRequired) {
     promptBody += `Incorporate verbatim matching character description elements into promptText when characters are active.\n`;
   }
   
@@ -1122,24 +1006,13 @@ async function generateThumbnailPrompts() {
     const tone = elements.inputTone.value;
     const world = elements.inputWorld.value;
     const power = elements.inputPower.value;
+    const character = elements.inputCharacter.value;
     
     const toneNotRequired = elements.toggleToneNotRequired.checked;
     const worldNotRequired = elements.toggleWorldNotRequired.checked;
     const powerNotRequired = elements.togglePowerNotRequired.checked;
-    const charsNotRequired = elements.toggleCharsNotRequired.checked;
+    const characterNotRequired = elements.toggleCharacterNotRequired.checked;
     
-    // Accumulate active character definitions
-    let activeChars = '';
-    if (!charsNotRequired) {
-      const charBlocks = document.querySelectorAll('.character-block');
-      activeChars = Array.from(charBlocks).map(block => {
-        const name = block.querySelector('.char-name').value.trim();
-        const desc = block.querySelector('.char-desc').value.trim();
-        if (name) return `${name}: ${desc}`;
-        return null;
-      }).filter(c => c !== null).join(', ');
-    }
-
     // Use summary of first few lines of script
     const scriptSnippet = state.results.slice(0, 10).map(r => r.scriptLine).join(' ');
 
@@ -1147,7 +1020,7 @@ async function generateThumbnailPrompts() {
     if (!toneNotRequired) specs += `- Tone: ${tone}\n`;
     if (!worldNotRequired) specs += `- World: ${world}\n`;
     if (!powerNotRequired) specs += `- Power Indicators: ${power}\n`;
-    if (!charsNotRequired) specs += `- Key Characters: ${activeChars}\n`;
+    if (!characterNotRequired) specs += `- Key Characters: ${character}\n`;
     specs += `- Story backdrop: ${scriptSnippet}`;
 
     const promptText = `
