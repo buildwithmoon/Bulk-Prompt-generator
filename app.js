@@ -104,6 +104,7 @@ const elements = {
   
   dashboardSection: document.getElementById('dashboard-section'),
   dashboardStatusText: document.getElementById('dashboard-status-text'),
+  btnRetryFailed: document.getElementById('btn-retry-failed'),
   btnCancelGeneration: document.getElementById('btn-cancel-generation'),
   progressBarFill: document.getElementById('progress-bar-fill'),
   progressTextFraction: document.getElementById('progress-text-fraction'),
@@ -118,6 +119,7 @@ const elements = {
   
   resultsSection: document.getElementById('results-section'),
   resultsMetaText: document.getElementById('results-meta-text'),
+  btnRetryFailedResults: document.getElementById('btn-retry-failed-results'),
   btnCopyAll: document.getElementById('btn-copy-all'),
   btnDownloadTxt: document.getElementById('btn-download-txt'),
   btnDownloadCsv: document.getElementById('btn-download-csv'),
@@ -191,7 +193,9 @@ function loadFromLocalStorage() {
       state.apiKeys = JSON.parse(keys).map(k => ({
         ...k,
         status: 'idle',
-        cooldownUntil: 0
+        cooldownUntil: 0,
+        lastUsed: 0,
+        consecutiveRateLimits: 0
       }));
       renderKeys();
     }
@@ -207,7 +211,7 @@ function loadFromLocalStorage() {
     elements.inputPower.value = localStorage.getItem('story_power') || "";
     
     elements.selectModel.value = localStorage.getItem('settings_model') || "gemini-2.5-flash";
-    elements.inputChunkSize.value = localStorage.getItem('settings_chunk_size') || "5";
+    elements.inputChunkSize.value = localStorage.getItem('settings_chunk_size') || "10";
     elements.inputConcurrency.value = localStorage.getItem('settings_concurrency') || "3";
 
     // Load toggles
@@ -264,6 +268,10 @@ function setupEventListeners() {
   elements.btnDownloadCsv.addEventListener('click', downloadCSVFile);
   elements.inputSearchPrompts.addEventListener('input', filterResultsTable);
   
+  // Retry Actions
+  elements.btnRetryFailed.addEventListener('click', retryFailedChunks);
+  elements.btnRetryFailedResults.addEventListener('click', retryFailedChunks);
+  
   // Modals close
   elements.btnCloseModal.addEventListener('click', () => elements.hookModal.classList.add('hidden'));
   window.addEventListener('click', (e) => {
@@ -319,7 +327,9 @@ function addApiKey() {
     key: key,
     label: label,
     status: 'idle',
-    cooldownUntil: 0
+    cooldownUntil: 0,
+    lastUsed: 0,
+    consecutiveRateLimits: 0
   });
   
   elements.inputApiKey.value = '';
@@ -470,7 +480,7 @@ function startGeneration() {
   }
   
   // Read parameters
-  const chunkSize = Math.max(1, Math.min(20, parseInt(elements.inputChunkSize.value) || 5));
+  const chunkSize = Math.max(1, Math.min(50, parseInt(elements.inputChunkSize.value) || 10));
   const maxConcurrency = Math.max(1, Math.min(10, parseInt(elements.inputConcurrency.value) || 3));
   
   // Prep UI
@@ -479,7 +489,7 @@ function startGeneration() {
   elements.btnGenerate.innerHTML = `<span class="loading-dots">Generating Prompts</span>`;
   
   elements.dashboardSection.classList.remove('hidden');
-  elements.resultsSection.classList.add('hidden');
+  elements.resultsSection.classList.remove('hidden'); // Show results table immediately
   
   // Split parsedLines into chunks
   state.generationQueue = [];
@@ -503,7 +513,10 @@ function startGeneration() {
     failures: 0
   };
   
+  // Render placeholders immediately
+  renderResultsTable();
   updateDashboardUI();
+  updateRetryButtonsVisibility();
   
   // Launch workers
   state.runningWorkers = 0;
@@ -531,22 +544,44 @@ async function processNextQueueItem() {
   }
   
   chunk.status = 'generating';
-  updateDashboardUI();
   
-  // Pick active API key (load balanced)
+  // Update UI rows for these lines to show generating state
+  chunk.lines.forEach(line => {
+    if (elements.inputSearchPrompts.value.trim() !== '') {
+      renderResultsTable();
+    } else {
+      updateRowDOM(line.index);
+    }
+  });
+  
+  updateDashboardUI();
+  updateRetryButtonsVisibility();
+  
+  // Pick active API key (load balanced & paced)
   const apiKeyObj = getAvailableApiKey();
   if (!apiKeyObj) {
-    // Wait for a key to cool down and try again
+    // Wait for a key to cool down or pace and try again
     chunk.status = 'pending';
+    
+    // Update UI rows back to pending status
+    chunk.lines.forEach(line => {
+      if (elements.inputSearchPrompts.value.trim() !== '') {
+        renderResultsTable();
+      } else {
+        updateRowDOM(line.index);
+      }
+    });
+    
     updateDashboardUI();
+    updateRetryButtonsVisibility();
     
     // Re-check after a brief pause
     setTimeout(() => {
-      if (state.runningWorkers < parseInt(elements.inputConcurrency.value)) {
+      if (state.isGenerating && state.runningWorkers < parseInt(elements.inputConcurrency.value)) {
         state.runningWorkers++;
         processNextQueueItem();
       }
-    }, 3000);
+    }, 2000);
     
     state.runningWorkers--;
     return;
@@ -557,7 +592,8 @@ async function processNextQueueItem() {
   renderKeyActivityDashboard();
   
   try {
-    const generatedPrompts = await callGeminiAPI(chunk, apiKeyObj.key);
+    const generatedPrompts = await callGeminiAPI(chunk, apiKeyObj);
+    apiKeyObj.consecutiveRateLimits = 0; // reset consecutive rate limits on success
     
     // Validate output structure matches length of chunk
     if (!Array.isArray(generatedPrompts) || generatedPrompts.length !== chunk.lines.length) {
@@ -582,18 +618,29 @@ async function processNextQueueItem() {
     state.metrics.completedChunks++;
     apiKeyObj.status = 'idle';
     
+    // Update completed rows immediately
+    chunk.lines.forEach(line => {
+      if (elements.inputSearchPrompts.value.trim() !== '') {
+        renderResultsTable();
+      } else {
+        updateRowDOM(line.index);
+      }
+    });
+    
   } catch (err) {
     console.error(`Error processing chunk ${chunk.chunkIndex}:`, err);
     state.metrics.retries++;
     chunk.retries++;
     
     // Cooldown API key on 429 rate limit or general block
-    if (err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED')) {
+    if (err.status === 429 || err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED')) {
       apiKeyObj.status = 'rate-limited';
-      apiKeyObj.cooldownUntil = Date.now() + 45000; // 45 seconds penalty
-      console.warn(`Key ${apiKeyObj.label} rate limited. Cooling down...`);
+      apiKeyObj.consecutiveRateLimits = (apiKeyObj.consecutiveRateLimits || 0) + 1;
+      const penalty = err.retryAfter || (Math.min(90, 15 * Math.pow(2, apiKeyObj.consecutiveRateLimits - 1)) * 1000);
+      apiKeyObj.cooldownUntil = Date.now() + penalty;
+      console.warn(`Key ${apiKeyObj.label} rate limited. Cooling down for ${penalty / 1000}s...`);
     } else {
-      apiKeyObj.status = 'idle'; // Generic error, might just be output mismatch
+      apiKeyObj.status = 'idle'; // Generic error
     }
     
     if (chunk.retries >= 4) {
@@ -615,10 +662,20 @@ async function processNextQueueItem() {
       // Re-queue
       chunk.status = 'pending';
     }
+    
+    // Update failed rows immediately
+    chunk.lines.forEach(line => {
+      if (elements.inputSearchPrompts.value.trim() !== '') {
+        renderResultsTable();
+      } else {
+        updateRowDOM(line.index);
+      }
+    });
   }
   
   renderKeyActivityDashboard();
   updateDashboardUI();
+  updateRetryButtonsVisibility();
   
   // Continue processing queue
   processNextQueueItem();
@@ -644,15 +701,27 @@ function getAvailableApiKey() {
   
   if (availableKeys.length === 0) return null;
   
-  // Round-robin selection
-  state.currentActiveKeyIndex = (state.currentActiveKeyIndex + 1) % availableKeys.length;
-  return availableKeys[state.currentActiveKeyIndex];
+  // Sort available keys by lastUsed (ascending) so the one used longest ago is chosen first
+  availableKeys.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
+  
+  const bestKey = availableKeys[0];
+  
+  // Pacing: enforce 4000ms delay between requests on the same key
+  const minDelay = 4000;
+  const timeSinceLastUse = now - (bestKey.lastUsed || 0);
+  if (timeSinceLastUse < minDelay) {
+    return null;
+  }
+  
+  bestKey.lastUsed = now;
+  return bestKey;
 }
 
 // ==========================================
 // GEMINI API FETCH CALL
 // ==========================================
-async function callGeminiAPI(chunk, apiKey) {
+async function callGeminiAPI(chunk, apiKeyObj) {
+  const apiKey = apiKeyObj.key;
   let systemPrompt = elements.inputBasePrompt.value;
   const tone = elements.inputTone.value;
   const world = elements.inputWorld.value;
@@ -741,8 +810,28 @@ async function callGeminiAPI(chunk, apiKey) {
   });
 
   if (!response.ok) {
+    let retryAfter = null;
+    try {
+      const retryAfterHeader = response.headers.get('retry-after');
+      if (retryAfterHeader) {
+        if (/^\d+$/.test(retryAfterHeader)) {
+          retryAfter = parseInt(retryAfterHeader) * 1000;
+        } else {
+          const parsedDate = Date.parse(retryAfterHeader);
+          if (!isNaN(parsedDate)) {
+            retryAfter = Math.max(0, parsedDate - Date.now());
+          }
+        }
+      }
+    } catch (headerErr) {
+      console.warn("Failed to parse retry-after header", headerErr);
+    }
+    
     const errorText = await response.text();
-    throw new Error(`Gemini API Error: Status ${response.status} - ${errorText}`);
+    const err = new Error(`Gemini API Error: Status ${response.status} - ${errorText}`);
+    err.status = response.status;
+    err.retryAfter = retryAfter;
+    throw err;
   }
 
   const data = await response.json();
@@ -821,6 +910,16 @@ function cancelGeneration() {
   elements.btnGenerate.disabled = false;
   elements.btnGenerate.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Generate Bulk Prompts`;
   elements.dashboardStatusText.textContent = "Run cancelled by user.";
+  
+  // Reset active workers to pending
+  state.generationQueue.forEach(chunk => {
+    if (chunk.status === 'generating') {
+      chunk.status = 'pending';
+    }
+  });
+  
+  renderResultsTable();
+  updateRetryButtonsVisibility();
 }
 
 function checkGenerationCompletion() {
@@ -833,8 +932,8 @@ function checkGenerationCompletion() {
     elements.dashboardStatusText.textContent = "Prompt generation run complete!";
     elements.resultsSection.classList.remove('hidden');
     
-    // Sort and re-assemble
     renderResultsTable();
+    updateRetryButtonsVisibility();
   }
 }
 
@@ -844,44 +943,199 @@ function renderResultsTable() {
   
   let validResultsCount = 0;
   
-  state.results.forEach((res, i) => {
-    if (!res) return; // safety check
+  state.parsedLines.forEach((line, i) => {
+    const res = state.results[i];
+    const scriptText = line.text;
+    const promptText = res ? res.promptText : '';
+    const indexStr = line.index.toString();
     
-    const matchSearch = res.scriptLine.toLowerCase().includes(filteredQuery) || 
-                        res.promptText.toLowerCase().includes(filteredQuery) ||
-                        res.index.toString().includes(filteredQuery);
+    const matchSearch = scriptText.toLowerCase().includes(filteredQuery) || 
+                        promptText.toLowerCase().includes(filteredQuery) ||
+                        indexStr.includes(filteredQuery);
                         
     if (!matchSearch) return;
     
     validResultsCount++;
-    const formattedIndex = String(res.index).padStart(3, '0');
     
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="index-cell">${formattedIndex}</td>
-      <td class="script-cell">
-        <div>${res.scriptLine}</div>
-        ${res.timestamp ? `<div class="timestamp-text">${res.timestamp}</div>` : ''}
-      </td>
-      <td class="shot-cell">${res.shotType}</td>
-      <td>
-        <div class="prompt-cell" id="prompt-text-${res.index}">${res.promptText}</div>
-      </td>
-      <td class="text-center">
-        <button class="btn-icon-only btn-copy" onclick="window.copyPromptToClipboard(${res.index})" title="Copy Prompt">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-        </button>
-      </td>
-    `;
+    tr.id = `result-row-${line.index}`;
     elements.resultsTableBody.appendChild(tr);
+    
+    updateRowDOM(line.index);
   });
   
-  elements.resultsMetaText.textContent = `Displaying ${validResultsCount} of ${state.results.length} order-locked, strictly sequential prompts.`;
+  elements.resultsMetaText.textContent = `Displaying ${validResultsCount} of ${state.parsedLines.length} order-locked, strictly sequential prompts.`;
 }
 
 function filterResultsTable() {
   renderResultsTable();
 }
+
+function updateRowDOM(lineIndex) {
+  const rowEl = document.getElementById(`result-row-${lineIndex}`);
+  if (!rowEl) return;
+  
+  const res = state.results[lineIndex - 1];
+  const line = state.parsedLines[lineIndex - 1];
+  if (!line) return;
+  
+  const chunk = state.generationQueue.find(c => c.lines.some(l => l.index === lineIndex));
+  const chunkStatus = chunk ? chunk.status : 'pending';
+  
+  const formattedIndex = String(lineIndex).padStart(3, '0');
+  
+  let shotTypeHtml = '';
+  let promptHtml = '';
+  let actionHtml = '';
+  
+  if (chunkStatus === 'completed' && res) {
+    shotTypeHtml = res.shotType;
+    promptHtml = `<div class="prompt-cell" id="prompt-text-${lineIndex}">${res.promptText}</div>`;
+    actionHtml = `
+      <button class="btn-icon-only btn-copy" onclick="window.copyPromptToClipboard(${lineIndex})" title="Copy Prompt">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+      </button>
+    `;
+  } else if (chunkStatus === 'failed') {
+    shotTypeHtml = `<span class="badge badge-danger">Failed</span>`;
+    const errMsg = res ? res.promptText : '[FAILED TO GENERATE PROMPT: Rate limits exceeded or API blocked response for this line]';
+    promptHtml = `<div class="prompt-cell failed">${errMsg}</div>`;
+    actionHtml = `
+      <button class="btn-icon-only btn-retry-inline" onclick="window.retryLineChunk(${lineIndex})" title="Retry Line Chunk" style="border-color: var(--color-warning);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-warning)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+      </button>
+    `;
+  } else if (chunkStatus === 'generating') {
+    shotTypeHtml = `<span class="loading-dots" style="color: var(--color-accent);">Generating</span>`;
+    promptHtml = `<div class="prompt-cell" style="border-color: var(--color-accent-glow);"><span class="loading-dots" style="color: var(--color-accent);">Processing on key...</span></div>`;
+    actionHtml = ``;
+  } else {
+    shotTypeHtml = `<span style="color: var(--color-muted);">In Queue</span>`;
+    promptHtml = `<div class="prompt-cell" style="opacity: 0.5; font-style: italic; color: var(--color-muted);">Waiting in queue...</div>`;
+    actionHtml = ``;
+  }
+  
+  rowEl.innerHTML = `
+    <td class="index-cell">${formattedIndex}</td>
+    <td class="script-cell">
+      <div>${line.text}</div>
+      ${line.timestamp ? `<div class="timestamp-text">${line.timestamp}</div>` : ''}
+    </td>
+    <td class="shot-cell">${shotTypeHtml}</td>
+    <td>${promptHtml}</td>
+    <td class="text-center">${actionHtml}</td>
+  `;
+}
+
+function retryFailedChunks() {
+  let rescheduledCount = 0;
+  
+  state.generationQueue.forEach(chunk => {
+    if (chunk.status === 'failed') {
+      chunk.status = 'pending';
+      chunk.retries = 0;
+      
+      // Clear failed results
+      chunk.lines.forEach(line => {
+        state.results[line.index - 1] = undefined;
+        updateRowDOM(line.index);
+      });
+      rescheduledCount++;
+    }
+  });
+  
+  if (rescheduledCount === 0) return;
+  
+  state.metrics.failures = Math.max(0, state.metrics.failures - rescheduledCount);
+  
+  // Boot up worker pool
+  if (!state.isGenerating) {
+    state.isGenerating = true;
+    elements.btnGenerate.disabled = true;
+    elements.btnGenerate.innerHTML = `<span class="loading-dots">Generating Prompts</span>`;
+    
+    const maxConcurrency = Math.max(1, Math.min(10, parseInt(elements.inputConcurrency.value) || 3));
+    state.runningWorkers = 0;
+    const workersToLaunch = Math.min(maxConcurrency, state.generationQueue.filter(c => c.status === 'pending').length);
+    
+    for (let w = 0; w < workersToLaunch; w++) {
+      state.runningWorkers++;
+      processNextQueueItem();
+    }
+  } else {
+    const maxConcurrency = Math.max(1, Math.min(10, parseInt(elements.inputConcurrency.value) || 3));
+    if (state.runningWorkers < maxConcurrency) {
+      state.runningWorkers++;
+      processNextQueueItem();
+    }
+  }
+  
+  updateDashboardUI();
+  updateRetryButtonsVisibility();
+}
+
+function updateRetryButtonsVisibility() {
+  const hasFailures = state.generationQueue.some(c => c.status === 'failed');
+  const showRetry = hasFailures && !state.isGenerating;
+  
+  if (elements.btnRetryFailed) {
+    if (showRetry) {
+      elements.btnRetryFailed.classList.remove('hidden');
+    } else {
+      elements.btnRetryFailed.classList.add('hidden');
+    }
+  }
+  if (elements.btnRetryFailedResults) {
+    if (showRetry) {
+      elements.btnRetryFailedResults.classList.remove('hidden');
+    } else {
+      elements.btnRetryFailedResults.classList.add('hidden');
+    }
+  }
+}
+
+window.retryLineChunk = function(lineIndex) {
+  const chunk = state.generationQueue.find(c => c.lines.some(l => l.index === lineIndex));
+  if (!chunk) return;
+  
+  if (chunk.status === 'generating') return;
+  
+  chunk.status = 'pending';
+  chunk.retries = 0;
+  
+  chunk.lines.forEach(line => {
+    state.results[line.index - 1] = undefined;
+    updateRowDOM(line.index);
+  });
+  
+  if (state.metrics.failures > 0) {
+    state.metrics.failures--;
+  }
+  
+  if (!state.isGenerating) {
+    state.isGenerating = true;
+    elements.btnGenerate.disabled = true;
+    elements.btnGenerate.innerHTML = `<span class="loading-dots">Generating Prompts</span>`;
+    
+    const maxConcurrency = Math.max(1, Math.min(10, parseInt(elements.inputConcurrency.value) || 3));
+    state.runningWorkers = 0;
+    const workersToLaunch = Math.min(maxConcurrency, state.generationQueue.filter(c => c.status === 'pending').length);
+    
+    for (let w = 0; w < workersToLaunch; w++) {
+      state.runningWorkers++;
+      processNextQueueItem();
+    }
+  } else {
+    const maxConcurrency = Math.max(1, Math.min(10, parseInt(elements.inputConcurrency.value) || 3));
+    if (state.runningWorkers < maxConcurrency) {
+      state.runningWorkers++;
+      processNextQueueItem();
+    }
+  }
+  
+  updateDashboardUI();
+  updateRetryButtonsVisibility();
+};
 
 // ==========================================
 // EXPORTS AND CLIPBOARD OPERATIONS
@@ -905,9 +1159,11 @@ window.copyPromptToClipboard = copyPromptToClipboard;
 
 function copyAllPromptsToClipboard() {
   // Aggregate all prompts into standard numbered list
-  const textContent = state.results.map(res => {
-    const formattedIndex = String(res.index).padStart(3, '0');
-    return `${formattedIndex}\nScript: ${res.scriptLine}\nPrompt: ${res.promptText}\n`;
+  const textContent = state.parsedLines.map((line, i) => {
+    const res = state.results[i];
+    const formattedIndex = String(line.index).padStart(3, '0');
+    const promptText = res ? res.promptText : '[PENDING GENERATION]';
+    return `${formattedIndex}\nScript: ${line.text}\nPrompt: ${promptText}\n`;
   }).join('\n');
   
   navigator.clipboard.writeText(textContent).then(() => {
@@ -920,12 +1176,15 @@ function copyAllPromptsToClipboard() {
 }
 
 function downloadTXTFile() {
-  const textContent = state.results.map(res => {
-    const formattedIndex = String(res.index).padStart(3, '0');
+  const textContent = state.parsedLines.map((line, i) => {
+    const res = state.results[i];
+    const formattedIndex = String(line.index).padStart(3, '0');
+    const shotType = res ? res.shotType : 'Pending';
+    const promptText = res ? res.promptText : '[PENDING GENERATION]';
     return `${formattedIndex}
-Script: ${res.scriptLine}
-Shot Type: ${res.shotType}
-Prompt: ${res.promptText}
+Script: ${line.text}
+Shot Type: ${shotType}
+Prompt: ${promptText}
 `;
   }).join('\n' + '='.repeat(40) + '\n\n');
   
@@ -946,9 +1205,12 @@ function downloadCSVFile() {
   };
   
   let csvContent = 'Number,Script Line,Shot Type,Prompt Text\n';
-  state.results.forEach(res => {
-    const formattedIndex = String(res.index).padStart(3, '0');
-    csvContent += `${escapeCsv(formattedIndex)},${escapeCsv(res.scriptLine)},${escapeCsv(res.shotType)},${escapeCsv(res.promptText)}\n`;
+  state.parsedLines.forEach((line, i) => {
+    const res = state.results[i];
+    const formattedIndex = String(line.index).padStart(3, '0');
+    const shotType = res ? res.shotType : 'Pending';
+    const promptText = res ? res.promptText : '[PENDING GENERATION]';
+    csvContent += `${escapeCsv(formattedIndex)},${escapeCsv(line.text)},${escapeCsv(shotType)},${escapeCsv(promptText)}\n`;
   });
   
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
@@ -1014,7 +1276,7 @@ async function generateThumbnailPrompts() {
     const characterNotRequired = elements.toggleCharacterNotRequired.checked;
     
     // Use summary of first few lines of script
-    const scriptSnippet = state.results.slice(0, 10).map(r => r.scriptLine).join(' ');
+    const scriptSnippet = state.parsedLines.slice(0, 10).map(l => l.text).join(' ');
 
     let specs = '';
     if (!toneNotRequired) specs += `- Tone: ${tone}\n`;
@@ -1110,8 +1372,8 @@ async function generateYoutubeSEO() {
   
   try {
     // Aggregate parts of the script to avoid exceeding window but keep full context
-    const firstLines = state.results.slice(0, 15).map(r => r.scriptLine).join(' ');
-    const lastLines = state.results.slice(-15).map(r => r.scriptLine).join(' ');
+    const firstLines = state.parsedLines.slice(0, 15).map(l => l.text).join(' ');
+    const lastLines = state.parsedLines.slice(-15).map(l => l.text).join(' ');
     const scriptExcerpt = `START: ${firstLines}\n\nEND: ${lastLines}`;
 
     const promptText = `

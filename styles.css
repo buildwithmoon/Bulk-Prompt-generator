@@ -1213,3 +1213,24 @@ textarea.form-input {
   pointer-events: none;
 }
 
+/* ==========================================
+   ERROR & RETRY VISUAL FEEDBACK
+   ========================================== */
+.badge-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--color-danger);
+}
+
+.prompt-cell.failed {
+  color: var(--color-danger);
+  border-color: rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.btn-icon-only.btn-retry-inline:hover {
+  background: var(--color-warning);
+  color: var(--bg-primary);
+  border-color: var(--color-warning);
+}
+
+
