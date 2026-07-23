@@ -499,6 +499,7 @@ function startGeneration() {
       chunkIndex: state.generationQueue.length,
       lines: chunkLines,
       retries: 0,
+      rateLimitRetries: 0,
       status: 'pending'
     });
   }
@@ -630,20 +631,24 @@ async function processNextQueueItem() {
   } catch (err) {
     console.error(`Error processing chunk ${chunk.chunkIndex}:`, err);
     state.metrics.retries++;
-    chunk.retries++;
+    
+    const isRateLimit = err.status === 429 || (err.message && (err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED') || err.message.includes('Quota')));
     
     // Cooldown API key on 429 rate limit or general block
-    if (err.status === 429 || err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED')) {
+    if (isRateLimit) {
+      chunk.rateLimitRetries = (chunk.rateLimitRetries || 0) + 1;
       apiKeyObj.status = 'rate-limited';
       apiKeyObj.consecutiveRateLimits = (apiKeyObj.consecutiveRateLimits || 0) + 1;
-      const penalty = err.retryAfter || (Math.min(90, 15 * Math.pow(2, apiKeyObj.consecutiveRateLimits - 1)) * 1000);
+      // Exponential backoff, up to 10 minutes (600,000ms) to allow recovery from TPM/RPM limits
+      const penalty = err.retryAfter || (Math.min(600, 15 * Math.pow(2, apiKeyObj.consecutiveRateLimits - 1)) * 1000);
       apiKeyObj.cooldownUntil = Date.now() + penalty;
       console.warn(`Key ${apiKeyObj.label} rate limited. Cooling down for ${penalty / 1000}s...`);
     } else {
+      chunk.retries = (chunk.retries || 0) + 1;
       apiKeyObj.status = 'idle'; // Generic error
     }
     
-    if (chunk.retries >= 4) {
+    if ((chunk.retries || 0) >= 4 || (chunk.rateLimitRetries || 0) >= 100) {
       // Chunk permanently failed
       chunk.status = 'failed';
       state.metrics.failures++;
@@ -706,8 +711,8 @@ function getAvailableApiKey() {
   
   const bestKey = availableKeys[0];
   
-  // Pacing: enforce 4000ms delay between requests on the same key
-  const minDelay = 4000;
+  // Pacing: enforce 4500ms delay between requests on the same key (safe margin for 15 RPM)
+  const minDelay = 4500;
   const timeSinceLastUse = now - (bestKey.lastUsed || 0);
   if (timeSinceLastUse < minDelay) {
     return null;
@@ -1034,6 +1039,7 @@ function retryFailedChunks() {
     if (chunk.status === 'failed') {
       chunk.status = 'pending';
       chunk.retries = 0;
+      chunk.rateLimitRetries = 0;
       
       // Clear failed results
       chunk.lines.forEach(line => {
@@ -1102,6 +1108,7 @@ window.retryLineChunk = function(lineIndex) {
   
   chunk.status = 'pending';
   chunk.retries = 0;
+  chunk.rateLimitRetries = 0;
   
   chunk.lines.forEach(line => {
     state.results[line.index - 1] = undefined;
